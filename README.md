@@ -41,7 +41,7 @@
 ###  GitHub Pagesで直接アクセス（推奨）
 
 ```
-https://mikunnem.github.io/symbol_viewer/
+[WebSocket](https://mikunnem.github.io/symbol_viewer/)
 ```
 
 👆 ブラウザでこのURLにアクセスするだけ！
