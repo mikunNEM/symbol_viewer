@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8" />
-<title>Symbol Live Tx Viewer (Identicon)</title>
+<title>Symbol Live Tx Viewer</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 
 <style>
@@ -23,14 +23,12 @@
     box-shadow: 0 2px 8px rgba(0,0,0,0.15);
   }
 
-  #list {
-    padding: 20px;
-  }
+  #list { padding: 20px; }
 
   .tx {
     background: #ffffff;
     margin-bottom: 16px;
-    padding: 14px 20px 14px 70px; /* 左にアイコン分の余白 */
+    padding: 14px 20px 14px 70px;
     border-radius: 14px;
     box-shadow: 0 4px 10px rgba(105, 70, 230, 0.15);
     animation: fadeIn 0.45s ease;
@@ -39,12 +37,10 @@
     position: relative;
   }
 
-  /* Unconfirmed is yellow */
   .unconfirmed {
     background: #fff7d1 !important;
   }
 
-  /* identicon container */
   .identicon {
     width: 42px;
     height: 42px;
@@ -63,9 +59,13 @@
     opacity: 0.9;
   }
 
-  .tx b {
-  color: #0066ff;
+  .time {
+    font-size: 12px;
+    margin-top: 4px;
+    color: #444;
   }
+
+  .tx b { color: #0066ff; }
 
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(14px); }
@@ -87,79 +87,108 @@ const NODES = [
 
 const ADDRESS = "TANWG4F32RMJT6UEKA2COQPJERCDLHB34RIGBII";
 
+/* テストネット epochAdjustment */
+const epochAdjustment = 1667250467;
+
 let ws = null;
 let uid = "";
 const callbacks = {};
 const txMap = {};
 
 /* ============================================================
-   🧩 Blockies Identicon Generator（GitHub風）
+   Symbol timestamp → 人間の時間へ
+   ============================================================ */
+function formatTimestamp(ts) {
+  if (!ts) return "";
+  const sec = epochAdjustment + (Number(ts) / 1000);
+  return new Date(sec * 1000).toLocaleString("ja-JP", { hour12: false });
+}
+
+/* ============================================================
+   Identicon
    ============================================================ */
 function identiconSvg(address) {
-  // Hash → 15 bytes
   let hash = [];
   for (let i = 0; i < address.length; i++) {
     hash.push(address.charCodeAt(i) & 0xff);
   }
   while (hash.length < 15) hash.push(0);
 
-  // Hue from first byte
   const hue = hash[0] % 360;
-
-  // 5×5 grid
   let svg = `<svg width="42" height="42" viewBox="0 0 5 5" xmlns="http://www.w3.org/2000/svg">`;
 
   for (let y = 0; y < 5; y++) {
     for (let x = 0; x < 3; x++) {
       const i = (x + y * 3) % hash.length;
-      const bit = hash[i] & 1;
-
-      if (bit === 1) {
+      if (hash[i] & 1) {
         const color = `hsl(${hue},70%,55%)`;
         svg += `<rect x="${x}" y="${y}" width="1" height="1" fill="${color}"/>`;
         svg += `<rect x="${4-x}" y="${y}" width="1" height="1" fill="${color}"/>`;
       }
     }
   }
-
   svg += `</svg>`;
-  return "data:image/svg+xml;base64," + btoa(svg);
+
+  return "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svg)));
 }
 
 /* ============================================================
-   decodeMessage()
+   メッセージ復号
    ============================================================ */
 function decodeMessage(payload) {
-  if (!payload || typeof payload !== "string") return "(no message)";
+  if (!payload) return "(no message)";
   let hex = payload;
   if (hex.startsWith("00")) hex = hex.slice(2);
-
   const arr = hex.match(/.{1,2}/g);
   if (!arr) return "(decode error)";
   const bytes = new Uint8Array(arr.map(h => parseInt(h, 16)));
-
   try { return new TextDecoder("utf-8").decode(bytes); }
   catch { return "(decode error)"; }
 }
 
 /* ============================================================
-   🎨 UI: カード生成（Identicon付き）
+   ブロックの timestamp を REST から取得
    ============================================================ */
-function createTxElement(hash, msg, state, sender) {
+async function getBlockTimestamp(height) {
+  try {
+    const NODE = NODES[Math.floor(Math.random() * NODES.length)];
+    const res = await fetch(`${NODE}/blocks/${height}`);
+    const json = await res.json();
+    return json.block.timestamp;
+  } catch (e) {
+    console.error("Block fetch error:", e);
+    return null;
+  }
+}
+
+/* ============================================================
+   カード生成
+   ============================================================ */
+function createTxElement(hash, msg, state, sender, timestamp) {
   const div = document.createElement("div");
   div.className = `tx ${state}`;
   div.id = hash;
 
-  /* Identicon */
   const icon = document.createElement("img");
   icon.className = "identicon";
   icon.src = identiconSvg(sender);
   div.appendChild(icon);
 
-  div.innerHTML += `
-    <b>${msg}</b>
-    <div class="hash">${state.toUpperCase()} - ${hash}</div>
-  `;
+  const msgEl = document.createElement("b");
+  msgEl.textContent = msg;
+  div.appendChild(msgEl);
+
+  const hashEl = document.createElement("div");
+  hashEl.className = "hash";
+  hashEl.textContent = `${state.toUpperCase()} - ${hash}`;
+  div.appendChild(hashEl);
+
+  if (state === "confirmed" && timestamp) {
+    const timeEl = document.createElement("div");
+    timeEl.className = "time";
+    timeEl.textContent = "🕒 " + formatTimestamp(timestamp);
+    div.appendChild(timeEl);
+  }
 
   div.onclick = () =>
     window.open(`https://testnet.symbol.fyi/transactions/${hash}`, "_blank");
@@ -168,51 +197,63 @@ function createTxElement(hash, msg, state, sender) {
   txMap[hash] = div;
 }
 
-function promote(hash) {
+/* ============================================================
+   未承認 → 承認 の昇格処理
+   ============================================================ */
+function promote(hash, timestamp) {
   const el = txMap[hash];
   if (!el) return;
+
   el.classList.remove("unconfirmed");
   el.classList.add("confirmed");
-  el.querySelector(".hash").textContent = `CONFIRMED - ${hash}`;
+
+  const hashEl = el.querySelector(".hash");
+  hashEl.textContent = `CONFIRMED - ${hash}`;
+
+  if (!el.querySelector(".time") && timestamp) {
+    const timeDiv = document.createElement("div");
+    timeDiv.className = "time";
+    timeDiv.textContent = "🕒 " + formatTimestamp(timestamp);
+    el.appendChild(timeDiv);
+  }
 }
 
 /* ============================================================
-   過去履歴読み込み
+   過去履歴読み込み（REST）
    ============================================================ */
 async function loadHistory() {
   const NODE = NODES[Math.floor(Math.random() * NODES.length)];
-  const url =
-    `${NODE}/transactions/confirmed?address=${ADDRESS}&pageSize=30&order=desc`;
+  const url = `${NODE}/transactions/confirmed?address=${ADDRESS}&pageSize=30&order=desc`;
 
   try {
     const res = await fetch(url);
     const json = await res.json();
     const txs = json.data || [];
-
     txs.reverse().forEach(item => {
       const hash = item.meta.hash;
       if (txMap[hash]) return;
 
-      const msg = decodeMessage(item.transaction.message);
-      const sender = item.transaction.signerPublicKey;
-
-      createTxElement(hash, msg, "confirmed", sender);
+      createTxElement(
+        hash,
+        decodeMessage(item.transaction.message),
+        "confirmed",
+        item.transaction.signerPublicKey,
+        item.meta.timestamp
+      );
     });
-
   } catch (e) {
     console.error("History load failed:", e);
   }
 }
 
 /* ============================================================
-   WebSocket 永続接続
+   WebSocket 接続
    ============================================================ */
 async function connectWS() {
   const NODE = NODES[Math.floor(Math.random() * NODES.length)];
   const WSURL = NODE.replace("http", "ws") + "/ws";
 
   ws = new WebSocket(WSURL);
-
   ws.onopen = () => console.log("WS Connected:", WSURL);
 
   ws.onmessage = (e) => {
@@ -227,15 +268,12 @@ async function connectWS() {
     }
 
     if (callbacks[data.topic]) {
-      callbacks[data.topic].forEach(cb => cb(data.data));
+      callbacks[data.topic].forEach(cb => cb(data));
     }
   };
 
   ws.onerror = (e) => console.error("WS Error:", e);
-  ws.onclose = () => {
-    uid = "";
-    setTimeout(connectWS, 2000);
-  };
+  ws.onclose = () => setTimeout(connectWS, 2000);
 }
 
 function subscribe(topic) {
@@ -243,35 +281,52 @@ function subscribe(topic) {
 }
 
 /* ============================================================
-   WebSocket イベント登録
+   コールバック登録
    ============================================================ */
 function addCallback(topic, cb) {
   if (!callbacks[topic]) callbacks[topic] = [];
   callbacks[topic].push(cb);
 }
 
-addCallback(`unconfirmedAdded/${ADDRESS}`, tx => {
-  const hash = tx.meta.hash;
-  const msg = decodeMessage(tx.transaction.message);
-  const sender = tx.transaction.signerPublicKey;
-
-  createTxElement(hash, msg, "unconfirmed", sender);
+/* ============================================================
+   未承認
+   ============================================================ */
+addCallback(`unconfirmedAdded/${ADDRESS}`, payload => {
+  const tx = payload.data;
+  createTxElement(
+    tx.meta.hash,
+    decodeMessage(tx.transaction.message),
+    "unconfirmed",
+    tx.transaction.signerPublicKey,
+    null
+  );
 });
 
-addCallback(`confirmedAdded/${ADDRESS}`, tx => {
+/* ============================================================
+   承認（height → timestamp）
+   ============================================================ */
+addCallback(`confirmedAdded/${ADDRESS}`, async payload => {
+  const tx = payload.data;
+
   const hash = tx.meta.hash;
+  const height = tx.meta.height;
   const sender = tx.transaction.signerPublicKey;
+  const msg = decodeMessage(tx.transaction.message);
+
+  const blockTimestamp = await getBlockTimestamp(height);
 
   if (!txMap[hash]) {
-    const msg = decodeMessage(tx.transaction.message);
-    createTxElement(hash, msg, "confirmed", sender);
+    createTxElement(hash, msg, "confirmed", sender, blockTimestamp);
   } else {
-    promote(hash);
+    promote(hash, blockTimestamp);
   }
 });
 
-addCallback("block", block =>
-  console.log("⛓ Block:", block.block.height)
+/* ============================================================
+   ブロック
+   ============================================================ */
+addCallback("block", payload =>
+  console.log("⛓ Block:", payload.data.block.height)
 );
 
 /* ============================================================
