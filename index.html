@@ -32,10 +32,17 @@
     border-radius: 14px;
     box-shadow: 0 4px 10px rgba(105, 70, 230, 0.15);
     animation: fadeIn 0.45s ease;
-    transition: all 0.35s ease;
+    transition: transform 0.25s ease, box-shadow 0.25s ease;
     cursor: pointer;
     position: relative;
   }
+
+  /* ホバー浮き上がり */
+  .tx:hover {
+    transform: translateY(-4px) scale(1.02);
+    box-shadow: 0 8px 18px rgba(105, 70, 230, 0.25);
+  }
+
 
   .unconfirmed {
     background: #fff7d1 !important;
