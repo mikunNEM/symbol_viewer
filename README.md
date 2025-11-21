@@ -38,9 +38,9 @@
 
 ## 🚀 使い方
 
-###  GitHub Pagesで直接アクセス（推奨）
+###  GitHub Pages に直接アクセス
 
-![WebSocket](https://mikunnem.github.io/symbol_viewer/)
+[Symbol Live Tx Viewer](https://mikunnem.github.io/symbol_viewer/)
 
 
 👆 ブラウザでこのURLにアクセスするだけ！
