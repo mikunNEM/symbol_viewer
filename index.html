@@ -223,7 +223,7 @@ function promote(hash, timestamp) {
    ============================================================ */
 async function loadHistory() {
   const NODE = NODES[Math.floor(Math.random() * NODES.length)];
-  const url = `${NODE}/transactions/confirmed?address=${ADDRESS}&pageSize=30&order=desc`;
+  const url = `${NODE}/transactions/confirmed?address=${ADDRESS}&pageSize=100&order=desc`;
 
   try {
     const res = await fetch(url);
